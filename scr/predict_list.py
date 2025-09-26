@@ -1,6 +1,7 @@
 import torch
 from model import ChemNet
 from data_utils import smiles_to_fingerprint
+import numpy as np
 
 # --- Load trained model ---
 model = ChemNet(input_dim=2048, hidden1_dim=1024, hidden2_dim=512, output_dim=1)
@@ -34,7 +35,8 @@ while True:
         continue
 
     # Convert to tensor
-    X_tensor = torch.tensor(X_new, dtype=torch.float32)
+    X_tensor = torch.tensor(np.array(X_new), dtype=torch.float32)
+
 
     # Predict
     with torch.no_grad():

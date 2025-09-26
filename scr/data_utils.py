@@ -3,16 +3,17 @@ from rdkit import Chem
 from rdkit.Chem import AllChem
 import torch
 import numpy as np
+from rdkit.Chem import rdFingerprintGenerator
 
-def smiles_to_fingerprint(smiles, radius=2, n_bits=2048):
-    """Convert SMILES to Morgan fingerprint (bit vector)"""
+# Use MorganGenerator instead of deprecated AllChem
+def smiles_to_fingerprint(smiles, radius=2, nBits=2048):
     mol = Chem.MolFromSmiles(smiles)
     if mol is None:
-        return None
-    fp = AllChem.GetMorganFingerprintAsBitVect(mol, radius=radius, nBits=n_bits)
-    arr = np.zeros((n_bits,), dtype=np.float32)
-    AllChem.DataStructs.ConvertToNumpyArray(fp, arr)
-    return arr
+        raise ValueError(f"Invalid SMILES: {smiles}")
+    gen = rdFingerprintGenerator.GetMorganGenerator(radius=radius, fpSize=nBits)
+    fp = gen.GetFingerprint(mol)  # returns ExplicitBitVect
+    return np.array(fp)
+
 
 def load_dataset(csv_path, smiles_col="smiles", target_col="measured log solubility in mols per litre"):
     """Load CSV and return features (X) and targets (y)."""
