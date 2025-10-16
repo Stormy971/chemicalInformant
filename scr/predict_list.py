@@ -1,11 +1,15 @@
+import sys, os
+sys.path.append(os.path.dirname(os.path.dirname(__file__)))  # go up one level
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+
 import torch
 from model import ChemNet
-from data_utils import smiles_to_fingerprint
-import numpy as np
+from scr.data_utils import smiles_to_fingerprint
+
 
 # --- Load trained model ---
 model = ChemNet(input_dim=2048, hidden1_dim=1024, hidden2_dim=512, output_dim=1)
-model.load_state_dict(torch.load("models/chemnet_weights.pth"))
+model.load_state_dict(torch.load("models/solubility_model.pth"))
 model.eval()
 
 print("ChemicalInformant Predictor")

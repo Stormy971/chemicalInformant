@@ -1,33 +1,36 @@
 import pandas as pd
 
-# Paths to your datasets
+# Paths to your CSV files
 paths = {
     "delaney": "data/solubilityData/delaney.csv",
     "freesolv": "data/solubilityData/freesolv.csv",
-    "lipophilicity": "data/solubilityData/lipophilicity.csv"
+    "lipo": "data/solubilityData/lipophilicity.csv",
+    "bigsoldb": "data/solubilityData/bigsoldbv2.csv",  # new dataset
+    "aqsoldb": "data/solubilityData/aqsolDB_v1.csv"
 }
 
-# Load and standardize Delaney dataset
-df_delaney = pd.read_csv(paths["delaney"])
-df_delaney = df_delaney[["Compound ID", "measured log(solubility:mol/L)", "SMILES"]].copy()
+# Function to read CSV, fix headers, and select columns
+def load_csv(path):
+    df = pd.read_csv(path, encoding="utf-8-sig")  # ensure proper encoding
+    df.columns = df.columns.str.strip()           # remove spaces from headers
+    # select only the columns we want
+    df = df[["Compound ID", "measured log(solubility:mol/L)", "SMILES"]].copy()
+    return df
 
-# Load and standardize FreeSolv dataset
-df_freesolv = pd.read_csv(paths["freesolv"])
-df_freesolv = df_freesolv[["Compound ID", "measured log(solubility:mol/L)", "SMILES"]].copy()
+# Load all datasets
+df_delaney = load_csv(paths["delaney"])
+df_freesolv = load_csv(paths["freesolv"])
+df_lipo = load_csv(paths["lipo"])
+df_bigsoldb = load_csv(paths["bigsoldb"])  # load BigSolDBv2
+df_aqsoldb = load_csv(paths["aqsoldb"])
 
-# Load and standardize Lipophilicity dataset
-df_lipo = pd.read_csv(paths["lipophilicity"])
-df_lipo = df_lipo[["Compound ID", "measured log(solubility:mol/L)", "SMILES"]].copy()
+# Merge into a single DataFrame
+df_merged = pd.concat([df_delaney, df_freesolv, df_lipo, df_bigsoldb, df_aqsoldb], ignore_index=True)
 
-# Concatenate all datasets
-df_merged = pd.concat([df_delaney, df_freesolv, df_lipo], ignore_index=True)
-
-# Optional: drop duplicate compounds based on SMILES
+# Optional: remove duplicates if any (based on SMILES)
 df_merged.drop_duplicates(subset="SMILES", inplace=True)
 
-# Save merged CSV
-output_path = "data/merged_solubility.csv"
-df_merged.to_csv(output_path, index=False)
+# Save the merged dataset
+df_merged.to_csv("data/solubilityData/merged_solubility.csv", index=False)
 
-print(f"Merged dataset saved to {output_path}")
-print(f"Total compounds: {len(df_merged)}")
+print("Merged CSV saved as 'merged_solubility.csv'. Total compounds:", len(df_merged))
