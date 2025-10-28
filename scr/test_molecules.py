@@ -1,93 +1,94 @@
+# scr/test_molecules.py
+
 import os
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
-import torch
 import pandas as pd
 import numpy as np
-from model import ChemNet
-from data_utils import smiles_to_fingerprint
+import torch
+from rdkit import Chem
+from rdkit.Chem import AllChem
 import matplotlib.pyplot as plt
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+from sklearn.preprocessing import StandardScaler
 
-# --- Paths ---
-test_csv = os.path.join("data", "solubilityData", "testing", "test_molecules.csv")
-results_csv = os.path.join("data", "solubilityData", "testing", "test_results.csv")
+# ------------------------------
+# 1. Load data
+# ------------------------------
+df = pd.read_csv("data/solubilityData/merged_solubility_full.csv")
 
-# --- Load trained model ---
-model = ChemNet(input_dim=2048, hidden1_dim=1024, hidden2_dim=512, output_dim=1)
-model.load_state_dict(torch.load("models/solubility_model.pth"))
+# Keep only valid SMILES
+df = df[df['SMILES'].apply(lambda x: Chem.MolFromSmiles(x) is not None)].reset_index(drop=True)
+
+# Target column
+target_col = 'measured log(solubility:mol/L)'
+
+# ------------------------------
+# 2. Load model and scaler
+# ------------------------------
+class SolubilityNet(torch.nn.Module):
+    def __init__(self, input_dim=2048, hidden_dim=1024):
+        super().__init__()
+        self.layer1 = torch.nn.Linear(input_dim, hidden_dim)
+        self.layer2 = torch.nn.Linear(hidden_dim, hidden_dim)
+        self.layer3 = torch.nn.Linear(hidden_dim, 1)
+        self.relu = torch.nn.ReLU()
+        self.dropout = torch.nn.Dropout(0.2)
+    def forward(self, x):
+        out = self.relu(self.layer1(x))
+        out = self.dropout(self.relu(self.layer2(out)))
+        out = self.layer3(out)
+        return out
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+model = SolubilityNet().to(device)
+model.load_state_dict(torch.load("models/solubility_model.pth", map_location=device))
 model.eval()
 
-# --- Load test set ---
-df_test = pd.read_csv(test_csv)
+scaler: StandardScaler = torch.load("models/scaler.pth")
 
-# --- Prepare fingerprints ---
-X_test = []
-valid_ids = []
-valid_smiles = []
-y_true = []
-types = []
-invalid_smiles = []
+# ------------------------------
+# 3. Prepare features
+# ------------------------------
+def mol_features(smiles, nBits=2048, radius=2):
+    mol = Chem.MolFromSmiles(smiles)
+    fp = AllChem.GetMorganFingerprintAsBitVect(mol, radius, nBits=nBits)
+    arr = np.zeros((nBits,), dtype=np.float32)
+    AllChem.DataStructs.ConvertToNumpyArray(fp, arr)
+    return arr
 
-for idx, row in df_test.iterrows():
-    smi = row["SMILES"]
-    mol_type = row["Type"] if "Type" in row else "Unknown"
-    try:
-        fp = smiles_to_fingerprint(smi)
-        X_test.append(fp)
-        valid_ids.append(row["Compound ID"])
-        valid_smiles.append(smi)
-        types.append(mol_type)
-        y_true.append(row["measured log(solubility:mol/L)"] if "measured log(solubility:mol/L)" in row else np.nan)
-    except Exception as e:
-        invalid_smiles.append(smi)
-        print(f"Skipping invalid SMILES: {smi} ({e})")
+X = np.array([mol_features(s) for s in df['SMILES']])
+X = scaler.transform(X)
+X_tensor = torch.tensor(X, dtype=torch.float32).to(device)
+y_true = df[target_col].values
 
-X_test = torch.tensor(np.array(X_test), dtype=torch.float32)
-
-# --- Predict ---
+# ------------------------------
+# 4. Predict
+# ------------------------------
 with torch.no_grad():
-    preds = model(X_test).numpy().flatten()
+    y_pred = model(X_tensor).cpu().numpy().flatten()
 
-# --- Build results DataFrame ---
-df_results = pd.DataFrame({
-    "Compound ID": valid_ids,
-    "SMILES": valid_smiles,
-    "Type": types,
-    "Predicted log(solubility:mol/L)": preds,
-    "Measured log(solubility:mol/L)": y_true
-})
+# ------------------------------
+# 5. Metrics
+# ------------------------------
+mae = mean_absolute_error(y_true, y_pred)
+rmse = np.sqrt(mean_squared_error(y_true, y_pred))
+r2 = r2_score(y_true, y_pred)
 
-if invalid_smiles:
-    print(f"\nSkipped {len(invalid_smiles)} invalid SMILES: {invalid_smiles}")
+print(f"MAE  : {mae:.4f}")
+print(f"RMSE : {rmse:.4f}")
+print(f"R²   : {r2:.4f}")
 
-# --- Compute errors ---
-df_results["Error"] = df_results["Predicted log(solubility:mol/L)"] - df_results["Measured log(solubility:mol/L)"]
-df_results["AbsError"] = df_results["Error"].abs()
-
-# --- Summary by type ---
-type_summary = df_results.groupby("Type")["AbsError"].agg(["mean", "count"]).reset_index()
-type_summary.rename(columns={"mean": "Mean AbsError", "count": "Num Molecules"}, inplace=True)
-print("\n=== Error Summary by Molecule Type ===")
-print(type_summary)
-
-# --- Plot predicted vs actual solubility ---
-plt.figure(figsize=(12,6))
-colors = plt.cm.tab20.colors  # color palette for types
-type_to_color = {t: colors[i % len(colors)] for i, t in enumerate(df_results["Type"].unique())}
-
-for i, row in df_results.iterrows():
-    plt.bar(i-0.2, row["Measured log(solubility:mol/L)"], width=0.4, color=type_to_color[row["Type"]], alpha=0.6)
-    plt.bar(i+0.2, row["Predicted log(solubility:mol/L)"], width=0.4, color=type_to_color[row["Type"]], alpha=0.9)
-
-plt.ylabel("log(solubility:mol/L)")
-plt.xlabel("Molecules")
-plt.title("Predicted vs Actual Solubility (Color-coded by Type)")
-plt.xticks([])
-plt.legend(handles=[plt.Rectangle((0,0),1,1,color=c, alpha=0.7) for t,c in type_to_color.items()],
-           labels=type_to_color.keys(), title="Molecule Type", bbox_to_anchor=(1.05,1))
-plt.tight_layout()
+# ------------------------------
+# 6. Scatter plot of predicted vs measured
+# ------------------------------
+plt.figure(figsize=(6,6))
+plt.scatter(y_true, y_pred, alpha=0.6)
+plt.plot([y_true.min(), y_true.max()], [y_true.min(), y_true.max()], 'r--')
+plt.xlabel("Measured")
+plt.ylabel("Predicted")
+plt.title("Predicted vs Measured Solubility")
+plt.grid(True)
+os.makedirs("plots", exist_ok=True)
+plt.savefig("plots/predicted_vs_measured.png")
 plt.show()
-
-# --- Save full results ---
-df_results.to_csv(results_csv, index=False)
-print(f"\n✅ Full test results saved to '{results_csv}'")

@@ -1,0 +1,16 @@
+Compound ID,SMILES,measured log(solubility:mol/L),Type,Predicted
+polar1,C(CO)O,-0.2,Polar,-3.6863258
+polar2,OCC(O)C(O)CO,0.1,Polar,0.651713
+acid1,C1=CC=CC=C1C(=O)O,-1.3,Acid,-1.461897
+acid2,CC(C)C(C(C)C(=O)O)O,-0.5,Acid,-1.3728637
+amino_acid1,C(C(=O)O)N,0.1,Amino Acid,0.701758
+amino_acid2,N[C@@H](CC(=O)O)C(=O)O,0.05,Amino Acid,0.7603184
+salt1,[Na+].[Cl-],1.0,Salt,0.6176199
+aromatic1,C1=CC2=CC=CC=C2C=C1,1.2,Aromatic,-3.7453094
+aromatic2,C1=CC=C(C=C1)C2=CC=CC=C2,0.8,Aromatic,-4.5943136
+unusual1,OP(=O)(O)O,0.3,Unusual,-0.1515925
+unusual2,CS(=O)(=O)C,0.2,Unusual,-4.5318856
+boron1,B(C1=CC=CC=C1)(C2=CC=CC=C2)C3=CC=CC=C3,-0.7,Boron,-3.546206
+drug_like1,CC(C)NCC(O)CO,0.5,Drug-like,-1.0777285
+random1,CN1C=NC2=C1C(=O)N(C(=O)N2C)C,0.6,Random,-2.5413578
+random2,CC1=CC(=O)NC(=O)N1C,0.4,Random,-2.3582606

@@ -1,110 +1,145 @@
-import sys, os
-sys.path.append(os.path.dirname(__file__))  # allows importing local modules
-os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+# scr/train.py
 
-import torch
-import torch.nn as nn
-import torch.optim as optim
-from torch.utils.data import Dataset, DataLoader
+import os
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"  # Prevent OpenMP conflicts
+
 import pandas as pd
 import numpy as np
+import torch
+import torch.nn as nn
+from torch.utils.data import Dataset, DataLoader
 from rdkit import Chem
-from rdkit.Chem import AllChem, DataStructs
-from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+from rdkit.Chem import AllChem
+import matplotlib.pyplot as plt
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
 
-from model import ChemNet  # <-- Use your ChemNet model
+# ------------------------------
+# 1. Load and clean data
+# ------------------------------
+df = pd.read_csv("data/solubilityData/merged_solubility_full.csv")
 
-# Suppress RDKit warnings
-from rdkit import RDLogger
-RDLogger.DisableLog('rdApp.*')
+# Drop rows with invalid SMILES
+def is_valid_smiles(smi):
+    return Chem.MolFromSmiles(smi) is not None
 
+df['valid'] = df['SMILES'].apply(is_valid_smiles)
+df = df[df['valid']].reset_index(drop=True)
 
-class ChemDataset(Dataset):
-    def __init__(self, csv_file):
-        df = pd.read_csv(csv_file)
-        self.smiles = df["SMILES"].values
-        self.labels = df["measured log(solubility:mol/L)"].values.astype(np.float32)
+# Features: Morgan Fingerprints
+def mol_features(smiles, nBits=2048, radius=2):
+    mol = Chem.MolFromSmiles(smiles)
+    if mol is None:
+        raise ValueError(f"Invalid SMILES: {smiles}")
+    fp = AllChem.GetMorganFingerprintAsBitVect(mol, radius, nBits=nBits)
+    arr = np.zeros((1,), dtype=np.float32)
+    AllChem.DataStructs.ConvertToNumpyArray(fp, arr)
+    return arr
 
+# Target column
+target_col = 'measured log(solubility:mol/L)'
+
+# ------------------------------
+# 2. Dataset
+# ------------------------------
+class MoleculeDataset(Dataset):
+    def __init__(self, df):
+        self.X = np.array([mol_features(smi) for smi in df['SMILES']], dtype=np.float32)
+        self.y = df[target_col].values.astype(np.float32).reshape(-1, 1)
+        
+        # Normalize features
+        self.scaler = StandardScaler()
+        self.X = self.scaler.fit_transform(self.X)
+        
     def __len__(self):
-        return len(self.smiles)
-
+        return len(self.y)
+    
     def __getitem__(self, idx):
-        X = self.mol_to_fp(self.smiles[idx])
-        y = torch.tensor(self.labels[idx], dtype=torch.float32)
-        return X, y
+        return torch.tensor(self.X[idx], dtype=torch.float32), torch.tensor(self.y[idx], dtype=torch.float32)
 
-    def mol_to_fp(self, smi):
-        mol = Chem.MolFromSmiles(smi)
-        if mol is None:
-            return torch.zeros(2048)
-        fp = AllChem.GetMorganFingerprintAsBitVect(mol, radius=2, nBits=2048)
-        arr = np.zeros((2048,), dtype=np.float32)
-        DataStructs.ConvertToNumpyArray(fp, arr)
-        return torch.tensor(arr, dtype=torch.float32)
+# ------------------------------
+# 3. Model
+# ------------------------------
+class SolubilityNet(nn.Module):
+    def __init__(self, input_dim=2048, hidden_dim=1024):
+        super().__init__()
+        self.layer1 = nn.Linear(input_dim, hidden_dim)
+        self.layer2 = nn.Linear(hidden_dim, hidden_dim)
+        self.layer3 = nn.Linear(hidden_dim, 1)
+        self.relu = nn.ReLU()
+        self.dropout = nn.Dropout(0.2)  # Optional regularization
+        
+    def forward(self, x):
+        out = self.relu(self.layer1(x))
+        out = self.dropout(self.relu(self.layer2(out)))
+        out = self.layer3(out)
+        return out
 
+# ------------------------------
+# 4. Prepare DataLoaders
+# ------------------------------
+dataset = MoleculeDataset(df)
+train_idx, val_idx = train_test_split(np.arange(len(dataset)), test_size=0.2, random_state=42)
 
-def train_model(csv_file, epochs=100, batch_size=32, lr=1e-3, device="cpu"):
-    dataset = ChemDataset(csv_file)
-    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+train_loader = DataLoader(torch.utils.data.Subset(dataset, train_idx), batch_size=64, shuffle=True)
+val_loader   = DataLoader(torch.utils.data.Subset(dataset, val_idx), batch_size=64, shuffle=False)
 
-    # Initialize ChemNet
-    model = ChemNet(input_dim=2048, hidden1_dim=1024, hidden2_dim=512, output_dim=1).to(device)
-    criterion = nn.MSELoss()
-    optimizer = optim.Adam(model.parameters(), lr=lr)
+# ------------------------------
+# 5. Training
+# ------------------------------
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+model = SolubilityNet(input_dim=2048).to(device)
+criterion = nn.MSELoss()
+optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 
-    all_epoch_losses = []
+train_losses, val_losses = [], []
 
-    # Training loop
-    for epoch in range(epochs):
-        model.train()
-        epoch_loss = 0
-        for X, y in dataloader:
-            X = X.to(device)
-            y = y.to(device)
-
-            optimizer.zero_grad()
-            outputs = model(X)
-            loss = criterion(outputs, y)
-            loss.backward()
-            optimizer.step()
-            epoch_loss += loss.item() * X.size(0)
-
-        epoch_loss /= len(dataset)
-        all_epoch_losses.append(epoch_loss)
-        print(f"Epoch {epoch+1} completed: Loss = {epoch_loss:.4f}")
-
-    # Print all epoch losses at the very end
-    print("\n===== Epoch Losses =====")
-    for i, loss in enumerate(all_epoch_losses, 1):
-        print(f"Epoch {i:3d}: Loss = {loss:.4f}")
-
-    # Evaluate on the full dataset
+for epoch in range(1, 51):
+    # Training
+    model.train()
+    train_loss = 0
+    for X_batch, y_batch in train_loader:
+        X_batch, y_batch = X_batch.to(device), y_batch.to(device)
+        optimizer.zero_grad()
+        y_pred = model(X_batch)
+        loss = criterion(y_pred, y_batch)
+        loss.backward()
+        optimizer.step()
+        train_loss += loss.item() * X_batch.size(0)
+    train_loss /= len(train_loader.dataset)
+    train_losses.append(train_loss)
+    
+    # Validation
     model.eval()
-    y_true, y_pred = [], []
+    val_loss = 0
     with torch.no_grad():
-        for X, y in dataloader:
-            X = X.to(device)
-            outputs = model(X)
-            y_true.extend(y.numpy())
-            y_pred.extend(outputs.cpu().numpy())
+        for X_batch, y_batch in val_loader:
+            X_batch, y_batch = X_batch.to(device), y_batch.to(device)
+            y_pred = model(X_batch)
+            loss = criterion(y_pred, y_batch)
+            val_loss += loss.item() * X_batch.size(0)
+    val_loss /= len(val_loader.dataset)
+    val_losses.append(val_loss)
+    
+    print(f"Epoch {epoch:02d}: Train Loss = {train_loss:.4f}, Val Loss = {val_loss:.4f}")
 
-    mae = mean_absolute_error(y_true, y_pred)
-    rmse = np.sqrt(mean_squared_error(y_true, y_pred))
-    r2 = r2_score(y_true, y_pred)
+# ------------------------------
+# 6. Save model and scaler
+# ------------------------------
+torch.save(model.state_dict(), "models/solubility_model.pth")
+torch.save(dataset.scaler, "models/scaler.pth")
 
-    print("\n===== Final Test Set Evaluation =====")
-    print(f"MAE  : {mae:.4f}")
-    print(f"RMSE : {rmse:.4f}")
-    print(f"R²   : {r2:.4f}")
-
-    # Save trained model
-    os.makedirs("models", exist_ok=True)
-    torch.save(model.state_dict(), "models/solubility_model.pth")
-    print("✅ Model saved as models/solubility_model.pth")
-
-
-if __name__ == "__main__":
-    csv_path = "data/solubilityData/merged_solubility.csv"
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"Using device: {device}")
-    train_model(csv_path, epochs=25, batch_size=32, lr=1e-3, device=device)
+# ------------------------------
+# 7. Plot loss curves
+# ------------------------------
+plt.figure(figsize=(8,5))
+plt.plot(train_losses, label='Train Loss')
+plt.plot(val_losses, label='Val Loss')
+plt.xlabel("Epoch")
+plt.ylabel("MSE Loss")
+plt.title("Training & Validation Loss")
+plt.legend()
+plt.grid(True)
+os.makedirs("plots", exist_ok=True)
+plt.savefig("plots/loss_curve.png")
+plt.show()

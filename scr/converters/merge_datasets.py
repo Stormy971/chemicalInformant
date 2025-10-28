@@ -1,36 +1,54 @@
+import os
 import pandas as pd
 
-# Paths to your CSV files
-paths = {
-    "delaney": "data/solubilityData/delaney.csv",
-    "freesolv": "data/solubilityData/freesolv.csv",
-    "lipo": "data/solubilityData/lipophilicity.csv",
-    "bigsoldb": "data/solubilityData/bigsoldbv2.csv",  # new dataset
-    "aqsoldb": "data/solubilityData/aqsolDB_v1.csv"
+# === Input paths ===
+data_dir = "data/solubilityData"
+
+# Define dataset files
+datasets = {
+    "Delaney": os.path.join(data_dir, "delaney.csv"),
+    "FreeSolv": os.path.join(data_dir, "freesolv.csv"),
+    "Lipophilicity": os.path.join(data_dir, "lipophilicity.csv"),
+    "AQSolDB": os.path.join(data_dir, "AQSolDBData.csv"),
+    "BigSolDB": os.path.join(data_dir, "bigsoldbv2.csv"),
 }
 
-# Function to read CSV, fix headers, and select columns
-def load_csv(path):
-    df = pd.read_csv(path, encoding="utf-8-sig")  # ensure proper encoding
-    df.columns = df.columns.str.strip()           # remove spaces from headers
-    # select only the columns we want
-    df = df[["Compound ID", "measured log(solubility:mol/L)", "SMILES"]].copy()
-    return df
+merged_data = []
 
-# Load all datasets
-df_delaney = load_csv(paths["delaney"])
-df_freesolv = load_csv(paths["freesolv"])
-df_lipo = load_csv(paths["lipo"])
-df_bigsoldb = load_csv(paths["bigsoldb"])  # load BigSolDBv2
-df_aqsoldb = load_csv(paths["aqsoldb"])
+# === Load datasets ===
+for name, path in datasets.items():
+    if os.path.exists(path):
+        print(f"✅ Loaded {name} dataset from {path}")
+        df = pd.read_csv(path)
 
-# Merge into a single DataFrame
-df_merged = pd.concat([df_delaney, df_freesolv, df_lipo, df_bigsoldb, df_aqsoldb], ignore_index=True)
+        # Normalize column names
+        df = df.rename(columns={
+            "Compound ID": "Compound ID",
+            "measured log(solubility:mol/L)": "measured log(solubility:mol/L)",
+            "SMILES": "SMILES"
+        })
 
-# Optional: remove duplicates if any (based on SMILES)
-df_merged.drop_duplicates(subset="SMILES", inplace=True)
+        # Ensure required columns exist
+        if not {"Compound ID", "measured log(solubility:mol/L)", "SMILES"}.issubset(df.columns):
+            print(f"⚠️ {name} missing one or more required columns, skipping")
+            continue
 
-# Save the merged dataset
-df_merged.to_csv("data/solubilityData/merged_solubility.csv", index=False)
+        df["Source"] = name
+        merged_data.append(df)
+    else:
+        print(f"⚠️ Missing dataset: {name} ({path})")
 
-print("Merged CSV saved as 'merged_solubility.csv'. Total compounds:", len(df_merged))
+# === Merge all ===
+if not merged_data:
+    raise FileNotFoundError("❌ No datasets found!")
+
+merged_df = pd.concat(merged_data, ignore_index=True)
+
+# Do NOT drop duplicates or missing values — preserve all
+output_path = os.path.join(data_dir, "merged_solubility_full.csv")
+os.makedirs(data_dir, exist_ok=True)
+merged_df.to_csv(output_path, index=False)
+
+print(f"\n✅ Merged dataset saved: {output_path}")
+print(f"📊 Total entries: {len(merged_df)}")
+print(f"📁 Sources merged: {', '.join(datasets.keys())}")

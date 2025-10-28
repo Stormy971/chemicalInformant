@@ -1,35 +1,28 @@
-import os
-os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
-
-import pandas as pd
+import numpy as np
+import torch
 from rdkit import Chem
 from rdkit.Chem import AllChem
-import torch
-import numpy as np
-from rdkit.Chem import rdFingerprintGenerator
 
-# Use MorganGenerator instead of deprecated AllChem
-def smiles_to_fingerprint(smiles, radius=2, nBits=2048):
+# Make Morgan fingerprints for molecules
+def mol_features(smiles, radius=2, nBits=2048):
     mol = Chem.MolFromSmiles(smiles)
     if mol is None:
-        raise ValueError(f"Invalid SMILES: {smiles}")
-    gen = rdFingerprintGenerator.GetMorganGenerator(radius=radius, fpSize=nBits)
-    fp = gen.GetFingerprint(mol)  # returns ExplicitBitVect
-    return np.array(fp)
+        print(f"[Warning] Invalid SMILES skipped: {smiles}")
+        return None  # Return None instead of raising
+    fp = AllChem.GetMorganFingerprintAsBitVect(mol, radius, nBits=nBits)
+    arr = np.zeros((nBits,), dtype=np.float32)
+    AllChem.DataStructs.ConvertToNumpyArray(fp, arr)
+    return arr
 
 
-def load_dataset(csv_path, smiles_col="smiles", target_col="measured log solubility in mols per litre"):
-    """Load CSV and return features (X) and targets (y)."""
-    df = pd.read_csv(csv_path)
-    X = []
-    y = []
+# Standard scaler
+class StandardScalerTorch:
+    def __init__(self, X):
+        self.mean = torch.tensor(X.mean(axis=0), dtype=torch.float32)
+        self.std = torch.tensor(X.std(axis=0), dtype=torch.float32)
 
-    for _, row in df.iterrows():
-        fp = smiles_to_fingerprint(row[smiles_col])
-        if fp is not None:
-            X.append(fp)
-            y.append(row[target_col])
+    def transform(self, X):
+        return (X - self.mean.numpy()) / self.std.numpy()
 
-    X = np.array(X, dtype=np.float32)
-    y = np.array(y, dtype=np.float32)
-    return X, y
+    def inverse_transform(self, X_scaled):
+        return X_scaled * self.std.numpy() + self.mean.numpy()
